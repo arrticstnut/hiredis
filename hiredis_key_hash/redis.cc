@@ -23,6 +23,14 @@ namespace cc
 		,_reply(NULL)
 	{}
 
+	void releaseContext(redisContext *ctx, bool active){
+		if(ctx == NULL) return;
+		if(!active) {redisFree(ctx); return;}
+		CAutoLock autolock(m_lock);
+		m_clients.push(ctx);
+	}
+	redisContext* createContext();
+
 	void Redis::Connect() {
 		_context = ::redisConnect(_conf.getIP().c_str(), _conf.getPort());
 		std::cout << _conf.getIP() << "-" << _conf.getPort() << std::endl;
