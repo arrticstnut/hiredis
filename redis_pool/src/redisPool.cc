@@ -3,7 +3,7 @@
 /// @author  
 /// @date    2018-08-10 18:25:18
 ///
-#include "redisPool.h"
+#include "../include/redisPool.h"
 #include <string.h>
 #include <stdlib.h>
 #include <sstream>
@@ -27,15 +27,9 @@ namespace cc
 	{}
 
 	RedisPool::~RedisPool(){
-		disConnect();
+		disAllConnect();
 	}
 
-	void RedisPool::releaseContext(redisContext *ctx,bool active){
-		if(ctx == NULL) return;
-		if(!active) {redisFree(ctx); return;}
-		std::lock_guard<std::mutex> lockGuard(_mutex);//保护类，用于函数异常退出时候释放锁
-		_contextQue.push(ctx);
-	}
 
 	redisContext* RedisPool::createContext(){
 		{
@@ -61,39 +55,14 @@ namespace cc
 		return ctx;
 	}
 
-	bool RedisPool::ExecuteCmd(const string & cmd,string &response) {//面向客户的执行命令接口
-		redisReply *reply = ExecuteCmd(cmd);//执行cmd
-		if(reply == NULL) return false;
-		std::shared_ptr<redisReply> autoFree(reply,freeReplyObject);
-		return getResponse(autoFree.get(),response);//分析reply的结果，保存在response中
+	void RedisPool::releaseContext(redisContext *ctx,bool active){//释放连接
+		if(ctx == NULL) return;
+		if(!active) {redisFree(ctx); return;}//真正释放
+		std::lock_guard<std::mutex> lockGuard(_mutex);//保护类，用于函数异常退出时候释放锁
+		_contextQue.push(ctx);//还到连接池
 	}
 
-
-	bool RedisPool::ExecuteCmdBy_2_InputArgs(const string & arg1,const string & arg2,
-			string & response){//输入2个命令参数+1个返回结果的变量
-		redisReply *reply = ExecuteCmdByInputArgs(arg1,arg2);//执行cmd
-		if(reply == NULL) return false;
-		std::shared_ptr<redisReply> autoFree(reply,freeReplyObject);
-		return getResponse(autoFree.get(),response);//分析reply的结果，保存在response中
-	}
-
-	bool RedisPool::ExecuteCmdBy_3_InputArgs(const string & arg1,const string & arg2,
-			const string & arg3,string & response){//输入3个命令参数+1个返回结果的变量
-		redisReply *reply = ExecuteCmdByInputArgs(arg1,arg2,arg3);//执行cmd
-		if(reply == NULL) return false;
-		std::shared_ptr<redisReply> autoFree(reply,freeReplyObject);
-		return getResponse(autoFree.get(),response);//分析reply的结果，保存在response中
-	}
-
-	bool RedisPool::ExecuteCmdBy_4_InputArgs(const string & arg1,const string & arg2,
-			const string & arg3,const string & arg4,string & response){//输入4个命令参数+1个返回结果的变量
-		redisReply *reply = ExecuteCmdByInputArgs(arg1,arg2,arg3,arg4);//执行cmd
-		if(reply == NULL) return false;
-		std::shared_ptr<redisReply> autoFree(reply,freeReplyObject);
-		return getResponse(autoFree.get(),response);//分析reply的结果，保存在response中
-	}
-
-	void RedisPool::disConnect() {
+	void RedisPool::disAllConnect() {
 		std::lock_guard<std::mutex> lockGuard(_mutex);//保护类
 		while(!_contextQue.empty())
 		{
@@ -103,6 +72,38 @@ namespace cc
 		}
 		//cout << "redis disConnect success" << endl;
 	}
+
+	bool RedisPool::ExecuteCmd(const string & cmd,vector<string> &response) {//面向客户的执行命令接口
+		redisReply *reply = ExecuteCmd(cmd);//执行cmd
+		if(reply == NULL) return false;
+		std::shared_ptr<redisReply> autoFree(reply,freeReplyObject);
+		return getArrayResponse(autoFree.get(),response);//分析reply的结果，保存在response中
+	}
+
+	bool RedisPool::ExecuteCmdBy_2_InputArgs(const string & arg1,const string & arg2,
+			vector<string> & response){//输入2个命令参数+1个返回结果的变量
+		redisReply *reply = ExecuteCmdByInputArgs(arg1,arg2);//执行cmd
+		if(reply == NULL) return false;
+		std::shared_ptr<redisReply> autoFree(reply,freeReplyObject);
+		return getArrayResponse(autoFree.get(),response);//分析reply的结果，保存在response中
+	}
+
+	bool RedisPool::ExecuteCmdBy_3_InputArgs(const string & arg1,const string & arg2,
+			const string & arg3,vector<string> & response){//输入3个命令参数+1个返回结果的变量
+		redisReply *reply = ExecuteCmdByInputArgs(arg1,arg2,arg3);//执行cmd
+		if(reply == NULL) return false;
+		std::shared_ptr<redisReply> autoFree(reply,freeReplyObject);
+		return getArrayResponse(autoFree.get(),response);//分析reply的结果，保存在response中
+	}
+
+	bool RedisPool::ExecuteCmdBy_4_InputArgs(const string & arg1,const string & arg2,
+			const string & arg3,const string & arg4,vector<string> & response){//输入4个命令参数+1个返回结果的变量
+		redisReply *reply = ExecuteCmdByInputArgs(arg1,arg2,arg3,arg4);//执行cmd
+		if(reply == NULL) return false;
+		std::shared_ptr<redisReply> autoFree(reply,freeReplyObject);
+		return getArrayResponse(autoFree.get(),response);//分析reply的结果，保存在response中
+	}
+
 
 	//---------------------------------------------------------------------------------
 	//以下是执行命令的内部接口
@@ -176,11 +177,31 @@ namespace cc
 			response = "Not Support Array Result!!!";
 			return false;
 		}
-		else
-		{
+		else {
 			response = "Undefine Reply Type";
 			return false;
 		}
+	}
 
+	bool RedisPool::getArrayResponse(redisReply *reply,vector<string> & response){//根据reply分析结果
+		response.clear();
+		if(reply->type == REDIS_REPLY_ARRAY) {//结果是数组类型
+			size_t size = reply->elements;
+			bool isValid = true;
+			for(size_t i = 0;i < size;++i){
+				auto subReply = reply->element[i];//elem又是reply类型
+				string result;
+				if(getResponse(subReply,result) == false){//调用getResponse
+					isValid = false;
+				}
+				response.push_back(result);
+			}
+			return isValid;
+		} else {//结果是非数组类型
+			string result;
+			bool isValid = getResponse(reply,result);
+			response.push_back(result);
+			return isValid;
+		}
 	}
 }

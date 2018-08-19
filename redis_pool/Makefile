@@ -27,7 +27,7 @@ CXX:=g++
 
 CXXFLAGS:= -Wall -std=c++11 $(addprefix -I, $(INC_DIR)) $(LIBS) -Wno-deprecated
 
-EXE:=./test.exe
+EXE:=./example.exe
 
 
 $(EXE):$(OBJS)
